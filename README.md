@@ -1,2 +1,2 @@
-# ECOKONEK-ver.2
- simple project for Waste Monitoring and EcoPoints System
+# E-brgy
+ simple project for Brgy management System
