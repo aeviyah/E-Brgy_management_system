@@ -2,7 +2,6 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-
 require_once '../config/db.php';
 
 if (empty($_SESSION['user_id'])) {
@@ -52,6 +51,77 @@ if ($is_admin) {
     }
 }
 
+/* ============================================
+   DELETE FACILITY (Admin only — BAGONG DAGDAG)
+   ============================================ */
+if ($is_admin && isset($_GET['action']) && $_GET['action'] === 'delete_facility' && isset($_GET['facility_id'])) {
+    $fac_id = intval($_GET['facility_id']);
+    if ($fac_id > 0) {
+        try {
+            /* Check kung may active reservations */
+            $chk = $conn->prepare("SELECT COUNT(*) AS c FROM facility_reservations WHERE facility_id = ? AND status IN ('Pending', 'Approved')");
+            $chk->bind_param("i", $fac_id);
+            $chk->execute();
+            $cnt = $chk->get_result()->fetch_assoc()['c'] ?? 0;
+
+            if ($cnt > 0) {
+                $msg = "Hindi pwedeng burahin — may $cnt active reservations pa sa facility na ito.";
+                $msg_type = "danger";
+            } else {
+                $stmt = $conn->prepare("DELETE FROM facilities WHERE facility_id = ?");
+                $stmt->bind_param("i", $fac_id);
+                if ($stmt->execute()) {
+                    $msg = "Nabura ang facility.";
+                    $msg_type = "success";
+                }
+            }
+        } catch (Throwable $e) {
+            $msg = "Delete error: " . $e->getMessage();
+            $msg_type = "danger";
+        }
+    }
+}
+
+/* ============================================
+   DELETE RESERVATION (Admin: lahat, Citizen: sarili — BAGONG DAGDAG)
+   ============================================ */
+if (isset($_GET['action']) && $_GET['action'] === 'delete_res' && isset($_GET['res_id'])) {
+    $del_res_id = intval($_GET['res_id']);
+
+    if ($del_res_id > 0) {
+        try {
+            $can_delete = false;
+
+            if ($is_admin) {
+                $can_delete = true;
+            } else {
+                $chk = $conn->prepare("SELECT user_id FROM facility_reservations WHERE reservation_id = ?");
+                $chk->bind_param("i", $del_res_id);
+                $chk->execute();
+                $row = $chk->get_result()->fetch_assoc();
+                if ($row && intval($row['user_id']) === intval($user_id)) {
+                    $can_delete = true;
+                }
+            }
+
+            if ($can_delete) {
+                $stmt = $conn->prepare("DELETE FROM facility_reservations WHERE reservation_id = ?");
+                $stmt->bind_param("i", $del_res_id);
+                if ($stmt->execute()) {
+                    $msg = "Nabura ang reservation record.";
+                    $msg_type = "success";
+                }
+            } else {
+                $msg = "Hindi ka pwedeng magbura ng reservation na ito.";
+                $msg_type = "danger";
+            }
+        } catch (Throwable $e) {
+            $msg = "Delete error: " . $e->getMessage();
+            $msg_type = "danger";
+        }
+    }
+}
+
 /* CITIZEN ACTIONS */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_reservation'])) {
     $facility_id = intval($_POST['facility_id'] ?? 0);
@@ -92,13 +162,13 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
     <title>Facilities & Reservations · E-Barangay</title>
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        :root { --night: #0c2733; --teal: #14566b; --palm: #2f8a57; --gold: #f2b84b; --line: #d9e1e4; --ink: #16262e; --muted: #5f717a; }
+        :root { --night: #0c2733; --teal: #14566b; --palm: #2f8a57; --gold: #f2b84b; --line: #d9e1e4; --ink: #16262e; --muted: #5f717a; --danger:#a4262c; --danger-bg:#fdecec; }
         * { margin:0; padding:0; box-sizing:border-box; }
         body { font-family: 'Figtree', sans-serif; color: #fff; background: var(--night); min-height: 100vh; }
         .scene { position: fixed; inset: 0; z-index: 0; background: linear-gradient(180deg, #0c2733 0%, #14566b 38%, #e9a85c 78%, #f7cf86 100%); }
         .scene::after { content: ""; position: absolute; inset: 0; background: rgba(8, 24, 33, 0.45); }
         .page { position: relative; z-index: 2; padding: 24px; max-width: 1200px; margin: 0 auto; }
-        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; gap: 12px; flex-wrap: wrap; }
         .btn-back { background: rgba(255,255,255,.15); color: #fff; text-decoration: none; padding: 8px 16px; border-radius: 999px; font-weight: 600; font-size: 14px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
         @media (max-width: 850px) { .grid { grid-template-columns: 1fr; } }
@@ -113,9 +183,14 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
         .badge-Pending { background: #fef3c7; color: #d97706; }
         .badge-Approved { background: #d1e7dd; color: #0f5132; }
         .badge-Rejected { background: #fee2e2; color: #dc2626; }
-        .btn-sm { font-size: 11px; padding: 4px 8px; border-radius: 6px; text-decoration: none; font-weight: 700; }
+        .btn-sm { font-size: 11px; padding: 5px 10px; border-radius: 6px; text-decoration: none; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
         .btn-approve { background: #d1e7dd; color: #0f5132; }
         .btn-reject { background: #fee2e2; color: #dc2626; }
+        .btn-delete { background: var(--danger-bg); color: var(--danger); border: 1px solid #f4c4c6; }
+        .btn-delete:hover { background: #fbd5d7; }
+        .alert { padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+        .alert-success { background: #d1e7dd; color: #0f5132; }
+        .alert-danger { background: var(--danger-bg); color: var(--danger); }
     </style>
 </head>
 <body>
@@ -127,7 +202,7 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
     </div>
 
     <?php if ($msg): ?>
-        <div style="background:#d1e7dd; color:#0f5132; padding:12px; border-radius:10px; margin-bottom:16px; font-weight:600;">
+        <div class="alert alert-<?= $msg_type === 'success' ? 'success' : 'danger' ?>">
             <?= e($msg) ?>
         </div>
     <?php endif; ?>
@@ -162,7 +237,7 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
                         </div>
                         <div class="form-group"><label>Purpose / Event Name</label><input type="text" name="purpose" required placeholder="e.g. Birthday Party / Sports Practice"></div>
                         <div class="form-group"><label>Reservation Date</label><input type="date" name="reservation_date" required></div>
-                        <div class="form-grid" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                             <div class="form-group"><label>Start Time</label><input type="time" name="start_time" required></div>
                             <div class="form-group"><label>End Time</label><input type="time" name="end_time" required></div>
                         </div>
@@ -173,13 +248,27 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 
             <div class="panel">
                 <h2>🏛️ Barangay Facilities List</h2>
-                <?php foreach ($facilities as $f): ?>
-                    <div class="item-card">
-                        <b style="color:var(--teal); font-size:16px;"><?= e($f['facility_name']) ?></b>
-                        <p style="font-size:13px; color:var(--muted); margin:4px 0;"><?= e($f['description']) ?></p>
-                        <small style="font-weight:700;">Capacity: <?= e($f['capacity']) ?> persons</small>
-                    </div>
-                <?php endforeach; ?>
+                <?php if (empty($facilities)): ?>
+                    <p style="font-size:13px; color:var(--muted);">Walang nakatalang facility.</p>
+                <?php else: ?>
+                    <?php foreach ($facilities as $f): ?>
+                        <div class="item-card">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                                <div style="flex:1;">
+                                    <b style="color:var(--teal); font-size:16px;"><?= e($f['facility_name']) ?></b>
+                                    <p style="font-size:13px; color:var(--muted); margin:4px 0;"><?= e($f['description']) ?></p>
+                                    <small style="font-weight:700;">Capacity: <?= e($f['capacity']) ?> persons</small>
+                                </div>
+                                <?php if ($is_admin): ?>
+                                    <a href="facilities.php?action=delete_facility&facility_id=<?= $f['facility_id'] ?>" class="btn-sm btn-delete" onclick="return confirm('Sigurado ka bang gusto mong burahin ang facility na ito?');">
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+                                        Delete
+                                    </a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -190,9 +279,11 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
                 <?php if (empty($reservations)): ?>
                     <p style="font-size:13px; color:var(--muted);">No reservation records found.</p>
                 <?php else: ?>
-                    <?php foreach ($reservations as $r): ?>
+                    <?php foreach ($reservations as $r):
+                        $can_delete_res = $is_admin || (intval($r['user_id']) === intval($user_id));
+                    ?>
                         <div class="item-card">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                                 <b style="color:var(--teal);"><?= e($r['facility_name']) ?></b>
                                 <span class="badge badge-<?= e($r['status']) ?>"><?= e($r['status']) ?></span>
                             </div>
@@ -201,12 +292,19 @@ function e($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
                                 <b>Purpose:</b> <?= e($r['purpose']) ?><br>
                                 <b>Date & Time:</b> <?= date('M d, Y', strtotime($r['reservation_date'])) ?> (<?= date('h:i A', strtotime($r['start_time'])) ?> - <?= date('h:i A', strtotime($r['end_time'])) ?>)
                             </div>
-                            <?php if ($is_admin && $r['status'] === 'Pending'): ?>
-                                <div style="margin-top:8px; display:flex; gap:6px;">
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                <?php if ($is_admin && $r['status'] === 'Pending'): ?>
                                     <a href="facilities.php?action=approve&res_id=<?= $r['reservation_id'] ?>" class="btn-sm btn-approve">✓ Approve</a>
                                     <a href="facilities.php?action=reject&res_id=<?= $r['reservation_id'] ?>" class="btn-sm btn-reject">✕ Reject</a>
-                                </div>
-                            <?php endif; ?>
+                                <?php endif; ?>
+
+                                <?php if ($can_delete_res): ?>
+                                    <a href="facilities.php?action=delete_res&res_id=<?= $r['reservation_id'] ?>" class="btn-sm btn-delete" onclick="return confirm('Burahin ang reservation na ito?');">
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+                                        Delete
+                                    </a>
+                                <?php endif; ?>
+                            </div>
                         </div>
                     <?php endforeach; ?>
                 <?php endif; ?>
